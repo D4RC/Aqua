@@ -1,0 +1,90 @@
+menu "Example Configuration"
+
+    config BLINK_GPIO
+        int "Blink GPIO number"
+        range 0 34
+        default 2
+        help
+            GPIO number (IOxx) to blink on and off.
+
+            Some GPIOs are used for other purposes (flash connections, etc.) and cannot be used to blink.
+
+            GPIOs 35-39 are input-only so cannot be used as outputs.
+
+    config PN532_SCK
+        int "PN532_SCK number"
+        range 0 34
+        default 18
+        help
+            GPIO number (IOxx) for Soft SPI.
+    
+    config PN532_SS
+        int "PN532_SS number"
+        range 0 34
+        default 5
+        help
+            GPIO number (IOxx) for Soft SPI.
+    
+    config PN532_MISO
+        int "PN532_MISO number"
+        range 0 34
+        default 19
+        help
+            GPIO number (IOxx) for Soft SPI.
+    
+    config PN532_MOSI
+        int "PN532_MOSI number"
+        range 0 34
+        default 23
+        help
+            GPIO number (IOxx) for Soft SPI.
+            
+    config I2C_NUM
+        int "I2C NUM"
+        default 0
+        help
+            I2C unit number
+    
+    config SCL_IO
+        int "SCL GPIO NUM"
+        default 26
+        help
+            GPIO pin for I2C SCL
+    
+    config SDA_IO
+        int "SDA GPIO NUM"
+        default 25
+        help
+            GPIO pin for I2C SDA
+    
+    config XSHUT_IO
+        int "XSHUT GPIO NUM"
+        default 27
+        help
+            GPIO pin for VL53L0X XSHUT
+
+    config TOF_INTR
+        int "TOF_GPIO GPIO NUM"
+        default 14
+        help
+            GPIO pin for VL53L0X Interrupt pin
+
+    config WATER_GPIO
+        int "WATER_PUMP GPIO NUM"
+        default 13
+        help
+            GPIO pin for the main water pump
+
+    config FLAVOR1_GPIO
+        int "FLAVOR1_PUMP GPIO NUM"
+        default 33
+        help
+            GPIO pin for the peristaltic pump 1
+
+    config FLAVOR2_GPIO
+        int "FLAVOR2_PUMP GPIO NUM"
+        default 32
+        help
+            GPIO pin for the peristaltic pump 2
+
+endmenu
