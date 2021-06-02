@@ -1,0 +1,7 @@
+# Project files
+project/sdkconfig
+project/sdkconfig.old
+project/build
+
+# VS Code Settings
+.vscode/
