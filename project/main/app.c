@@ -46,6 +46,8 @@ static pn532_t nfc;
 
 extern void vl53l0x_init();
 extern void vl53l0x_clear_interrupt();
+extern void initialize_iot();
+extern void mqtt_task(void *pvParameters);
 
 /*
     The Timer ISR callback will perform the following operations
@@ -257,12 +259,15 @@ void process_timer_task()
 
 void app_main()
 {
+    initialize_iot();
     s_timer_queue = xQueueCreate(10, sizeof(uint64_t));
     service_tg_timer_init();
     i2c_init();
     io_config();
 
     //xTaskCreate(&blink_task, "blink_task", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
+    
+    xTaskCreate(&mqtt_task, "mqtt_task", 8192, NULL, 5, NULL);
     xTaskCreate(&nfc_task, "nfc_task", 4096, NULL, 4, &xServiceTask);
     xTaskCreate(&process_timer_task, "process_timer_task", 4096, NULL, 3, NULL);
 }

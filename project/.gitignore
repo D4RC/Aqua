@@ -60,3 +60,6 @@ build/
 *.creator
 *.files
 *.includes
+
+#EC keys
+*.pem
