@@ -20,6 +20,14 @@
 
 extern const uint8_t ec_pv_key_start[] asm("_binary_private_key_pem_start");
 extern const uint8_t ec_pv_key_end[] asm("_binary_private_key_pem_end");
+extern xQueueHandle s_service_queue;
+
+typedef struct s_service_data{
+    uint8_t serve;
+    uint8_t flavor;
+    uint8_t concentration;
+    uint32_t quantity;
+} s_service_data_t;
 
 static const char *TAG = "APP";
 
@@ -30,13 +38,16 @@ const static int CONNECTED_BIT = BIT0;
 
 #define DEVICE_PATH "projects/%s/locations/%s/registries/%s/devices/%s"
 #define SUBSCRIBE_TOPIC_COMMAND "/devices/%s/commands/#"
+#define SUBSCRIBE_TOPIC_COMMANDS "/devices/%s/commands"
 #define SUBSCRIBE_TOPIC_CONFIG "/devices/%s/config"
 #define PUBLISH_TOPIC_EVENT "/devices/%s/events"
 #define PUBLISH_TOPIC_STATE "/devices/%s/state"
-#define USER_DEVICE_ID "{sid : %d}"
-#define SID 2000
+#define PUBLISH_TOPIC_EVENT_TRANSACTION "/devices/%s/events/transaction"
+#define USER_DEVICE_ID "%s"
+#define TRANSACTION "%s %u %hhu"
+#define SID "xxx"
 
-char *subscribe_topic_command, *subscribe_topic_config;
+char *subscribe_topic_command, *subscribe_topic_config, *subscribe_topic_commands;
 
 iotc_mqtt_qos_t iotc_example_qos = IOTC_MQTT_QOS_AT_LEAST_ONCE;
 //static iotc_timed_task_handle_t delayed_publish_task =
@@ -104,10 +115,11 @@ void iotc_mqttlogic_subscribe_callback(
         memcpy(sub_message, params->message.temporary_payload_data, params->message.temporary_payload_data_length);
         sub_message[params->message.temporary_payload_data_length] = '\0';
         ESP_LOGI(TAG, "Message Payload: %s ", sub_message);
-        if (strcmp(subscribe_topic_command, params->message.topic) == 0) {
-            int value;
-            sscanf(sub_message, "{\"outlet\": %d}", &value);
-            ESP_LOGI(TAG, "value: %d", value);
+        if (strcmp(subscribe_topic_commands, params->message.topic) == 0) {
+            s_service_data_t service_data;
+            sscanf(sub_message, "{\"serve\": %hhu, \"quantity\": %u, \"flavor\": %hhu, \"conc\": %hhu}", &service_data.serve, &service_data.quantity, &service_data.flavor, &service_data.concentration);
+            ESP_LOGI(TAG, "value: %d %d %d %d", service_data.serve, service_data.quantity, service_data.flavor, service_data.concentration);
+            xQueueSend( s_service_queue, ( void * ) &service_data, ( TickType_t ) 0 );
         }
         free(sub_message);
     }
@@ -126,6 +138,7 @@ void on_connection_state_changed(iotc_context_handle_t in_context_handle,
 
         // Sub to command topic
         asprintf(&subscribe_topic_command, SUBSCRIBE_TOPIC_COMMAND, CONFIG_GIOT_DEVICE_ID);
+        asprintf(&subscribe_topic_commands, SUBSCRIBE_TOPIC_COMMANDS, CONFIG_GIOT_DEVICE_ID);
         ESP_LOGI(TAG, "subscribing to topic: \"%s\"", subscribe_topic_command);
         iotc_subscribe(in_context_handle, subscribe_topic_command, IOTC_MQTT_QOS_AT_LEAST_ONCE,
                        &iotc_mqttlogic_subscribe_callback, /*user_data=*/NULL);
@@ -140,19 +153,6 @@ void on_connection_state_changed(iotc_context_handle_t in_context_handle,
         // delayed_publish_task = iotc_schedule_timed_task(in_context_handle,
         //                        publish_telemetry_event, 10,
         //                        15, /*user_data=*/NULL);
-        char *publish_topic = NULL;
-        asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
-        char *publish_message = NULL;
-        asprintf(&publish_message, USER_DEVICE_ID, SID);
-        ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);
-
-        iotc_publish(in_context_handle, publish_topic, publish_message,
-                 iotc_example_qos,
-                 /*callback=*/NULL, /*user_data=*/NULL);
-        free(publish_topic);
-        free(publish_message);
-
-
         break;
 
     /* IOTC_CONNECTION_STATE_OPEN_FAILED is set when there was a problem
@@ -320,6 +320,57 @@ static void wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_LOGI(TAG, "Waiting for wifi");
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+}
+
+void publish_service_request(uint8_t* target_uid, uint8_t uid_length)
+{
+    char *publish_message = (char*)malloc(uid_length*2 + 1);
+    int i;
+
+    for (i = 0; i<uid_length; i++)
+    {
+        sprintf(publish_message + i * 2, "%02x", target_uid[i]);
+    }
+
+    char *publish_topic = NULL;
+    asprintf(&publish_topic, PUBLISH_TOPIC_EVENT, CONFIG_GIOT_DEVICE_ID);
+    //char *publish_message = NULL;
+    //asprintf(&publish_message, USER_DEVICE_ID, SID);
+    ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);
+
+    iotc_publish(iotc_context, publish_topic, publish_message,
+                 iotc_example_qos,
+                 /*callback=*/NULL, /*user_data=*/NULL);
+
+    ESP_LOGI(TAG, "Done");
+    free(publish_topic);
+    free(publish_message);
+}
+
+void publish_transaction(uint8_t* target_uid, uint8_t uid_length, uint32_t quantity, uint8_t flavor)
+{
+    char *publish_target = (char*)malloc(uid_length*2 + 1);
+    int i;
+
+    for (i = 0; i<uid_length; i++)
+    {
+        sprintf(publish_target + i * 2, "%02x", target_uid[i]);
+    }
+
+    char *publish_topic = NULL;
+    asprintf(&publish_topic, PUBLISH_TOPIC_EVENT_TRANSACTION, CONFIG_GIOT_DEVICE_ID);
+    
+    char *publish_message = NULL;
+    asprintf(&publish_message, TRANSACTION, publish_target, quantity, flavor);
+    ESP_LOGI(TAG, "publishing msg \"%s\" to topic: \"%s\"", publish_message, publish_topic);
+
+    iotc_publish(iotc_context, publish_topic, publish_message,
+                 iotc_example_qos,
+                 /*callback=*/NULL, /*user_data=*/NULL);
+
+    ESP_LOGI(TAG, "Done");
+    free(publish_topic);
+    free(publish_message);
 }
 
 void initialize_iot()

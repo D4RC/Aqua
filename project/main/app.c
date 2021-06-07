@@ -38,6 +38,14 @@
 #define FLAVOR2_GPIO CONFIG_FLAVOR2_GPIO
 
 static xQueueHandle s_timer_queue;
+xQueueHandle s_service_queue;
+
+typedef struct s_service_data{
+    uint8_t serve;
+    uint8_t flavor;
+    uint8_t concentration;
+    uint32_t quantity;
+} s_service_data_t;
 
 static TaskHandle_t xServiceTask = NULL;
 
@@ -48,6 +56,10 @@ extern void vl53l0x_init();
 extern void vl53l0x_clear_interrupt();
 extern void initialize_iot();
 extern void mqtt_task(void *pvParameters);
+extern void publish_service_request(uint8_t *target_uid, uint8_t uid_length);
+extern void publish_transaction(uint8_t* target_uid, uint8_t uid_length, uint32_t quantity, uint8_t flavor);
+
+const TickType_t xDelay = 5000 / portTICK_PERIOD_MS;
 
 /*
     The Timer ISR callback will perform the following operations
@@ -62,6 +74,9 @@ static bool IRAM_ATTR timer_group_isr_callback(void *args)
     gpio_set_level(FLAVOR1_GPIO, 0);
     gpio_set_level(FLAVOR2_GPIO, 0);
     timer_group_set_counter_enable_in_isr(TIMER_GROUP_0, TIMER_0, TIMER_PAUSE);
+
+    uint64_t timer_counter_value = timer_group_get_counter_value_in_isr(TIMER_GROUP_0, TIMER_0);
+    xQueueSendFromISR(s_timer_queue, &timer_counter_value, &high_task_awoken);
     return high_task_awoken == pdTRUE; // return whether we need to yield at the end of ISR
 }
 
@@ -218,25 +233,76 @@ void nfc_task(void *pvParameter)
             ESP_LOGI(TAG, "UID Length: %d bytes", uidLength);
             ESP_LOGI(TAG, "UID Value:");
             esp_log_buffer_hexdump_internal(TAG, uid, uidLength, ESP_LOG_INFO);
-           
-            gpio_set_level(CONFIG_XSHUT_IO, 1);
-            vl53l0x_init();
-            
-            gpio_intr_enable(TOF_INTR_GPIO);
 
-            timer_set_counter_value(TIMER_GROUP_0, TIMER_0, 0);
-            timer_set_alarm_value(TIMER_GROUP_0, TIMER_0, 20 * TIMER_SCALE);
-            timer_start(TIMER_GROUP_0, TIMER_0);
+            publish_service_request(uid, uidLength);
+            s_service_data_t service_data;
 
-            gpio_set_level(WATER_GPIO, 1);
-            gpio_set_level(FLAVOR1_GPIO, 1);
+            xQueueReset(s_service_queue);
+            if (xQueueReceive(s_service_queue, ( void * )&service_data, xDelay ) == pdPASS)
+            {
+                if (service_data.serve)
+                {
+                    gpio_set_level(CONFIG_XSHUT_IO, 1);
+                    vl53l0x_init();
+                    gpio_intr_enable(TOF_INTR_GPIO);
+                    timer_set_counter_value(TIMER_GROUP_0, TIMER_0, 0);
+                    
+                    int timer_interval_sec;
+                    int time_scale = 0;
 
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-            
-            gpio_intr_disable(TOF_INTR_GPIO);
-            gpio_set_level(CONFIG_XSHUT_IO, 0);
+                    switch(service_data.flavor)
+                    {
+                        case 0: // Pure water
+                            gpio_set_level(WATER_GPIO, 1);
+                            timer_interval_sec = service_data.quantity / 15;
+                            time_scale = 15;
+                            break;
+                        case 1: // Lime
+                            gpio_set_level(WATER_GPIO, 1);
+                            gpio_set_level(FLAVOR1_GPIO, 1);
+                            timer_interval_sec = service_data.quantity / 18;    //18 ml / s
+                            time_scale = 18;
+                            break;
+                        case 2: // Cherry
+                            gpio_set_level(WATER_GPIO, 1);
+                            gpio_set_level(FLAVOR2_GPIO, 1);
+                            timer_interval_sec = service_data.quantity / 18;
+                            time_scale = 18;
+                            break;
+                        default:
+                            gpio_set_level(WATER_GPIO, 1);
+                            timer_interval_sec = service_data.quantity / 15;
+                            time_scale = 15;
+                            break;
+                    }
 
-            gpio_set_level(BLINK_GPIO, 0);
+                    timer_set_alarm_value(TIMER_GROUP_0, TIMER_0, timer_interval_sec * TIMER_SCALE);
+                    timer_start(TIMER_GROUP_0, TIMER_0);
+
+                    uint64_t counter_value;
+                    xQueueReceive(s_timer_queue, &counter_value, portMAX_DELAY);
+                    printf("Time   : %.8f s\r\n", (double) counter_value / TIMER_SCALE);
+
+                    uint32_t served_quantity = (counter_value / TIMER_SCALE) * time_scale;
+                    publish_transaction(uid, uidLength, served_quantity, service_data.flavor);
+                    
+                     // Wait until bottle is retired
+                    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+                    gpio_intr_disable(TOF_INTR_GPIO);
+                    gpio_set_level(CONFIG_XSHUT_IO, 0);
+
+                    gpio_set_level(BLINK_GPIO, 0);
+                }
+                else
+                {
+                    ESP_LOGI(TAG, "Not enough credits");
+                }
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Timed out, no response received from the server");
+            }
         }
         else
         {
@@ -247,20 +313,24 @@ void nfc_task(void *pvParameter)
     }
 }
 
-void process_timer_task()
-{
-    while(1)
-    {
-        uint64_t counter_value;
-        xQueueReceive(s_timer_queue, &counter_value, portMAX_DELAY);
-        printf("Time   : %.8f s\r\n", (double) counter_value / TIMER_SCALE);
-    }
-}
+// void process_timer_task()
+// {
+//     while(1)
+//     {
+//         uint64_t counter_value;
+//         xQueueReceive(s_timer_queue, &counter_value, portMAX_DELAY);
+        
+//         publish_transaction(uid, uidLength, , uint8_t flavor)
+//         printf("Time   : %.8f s\r\n", (double) counter_value / TIMER_SCALE);
+//     }
+// }
 
 void app_main()
 {
     initialize_iot();
-    s_timer_queue = xQueueCreate(10, sizeof(uint64_t));
+    s_timer_queue = xQueueCreate(1, sizeof(uint64_t));
+    s_service_queue = xQueueCreate(1, sizeof(s_service_data_t));
+    
     service_tg_timer_init();
     i2c_init();
     io_config();
@@ -269,6 +339,6 @@ void app_main()
     
     xTaskCreate(&mqtt_task, "mqtt_task", 8192, NULL, 5, NULL);
     xTaskCreate(&nfc_task, "nfc_task", 4096, NULL, 4, &xServiceTask);
-    xTaskCreate(&process_timer_task, "process_timer_task", 4096, NULL, 3, NULL);
+    //xTaskCreate(&process_timer_task, "process_timer_task", 4096, NULL, 3, NULL);
 }
 
