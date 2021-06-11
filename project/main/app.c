@@ -13,6 +13,7 @@
 #include "driver/i2c.h"
 
 #define BLINK_GPIO CONFIG_BLINK_GPIO
+#define STATUS_GPIO CONFIG_LED_STATUS_GPIO
 
 #define PN532_SCK CONFIG_PN532_SCK
 #define PN532_MOSI CONFIG_PN532_MOSI
@@ -59,7 +60,7 @@ extern void mqtt_task(void *pvParameters);
 extern void publish_service_request(uint8_t *target_uid, uint8_t uid_length);
 extern void publish_transaction(uint8_t* target_uid, uint8_t uid_length, uint32_t quantity, uint8_t flavor);
 
-const TickType_t xDelay = 5000 / portTICK_PERIOD_MS;
+const TickType_t xDelay = 10000 / portTICK_PERIOD_MS;
 
 /*
     The Timer ISR callback will perform the following operations
@@ -175,6 +176,9 @@ void io_config()
 
     gpio_pad_select_gpio(BLINK_GPIO);
     gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
+
+    gpio_pad_select_gpio(STATUS_GPIO);
+    gpio_set_direction(STATUS_GPIO, GPIO_MODE_OUTPUT);
 }
 
 
@@ -197,7 +201,7 @@ void nfc_task(void *pvParameter)
     uint32_t versiondata = pn532_getFirmwareVersion(&nfc);
     if (!versiondata)
     {
-        gpio_set_level(BLINK_GPIO, 1);
+        gpio_set_level(STATUS_GPIO, 1);
         ESP_LOGI(TAG, "Didn't find PN53x board");
         while (1)
         {
@@ -226,7 +230,7 @@ void nfc_task(void *pvParameter)
 
         if (success)
         {
-            gpio_set_level(BLINK_GPIO, 1);
+            gpio_set_level(STATUS_GPIO, 1);
 
             // Display some basic information about the card
             ESP_LOGI(TAG, "Found an ISO14443A card");
@@ -248,31 +252,31 @@ void nfc_task(void *pvParameter)
                     timer_set_counter_value(TIMER_GROUP_0, TIMER_0, 0);
                     
                     int timer_interval_sec;
-                    int time_scale = 0;
+                    float time_scale = 0;
 
                     switch(service_data.flavor)
                     {
                         case 0: // Pure water
                             gpio_set_level(WATER_GPIO, 1);
-                            timer_interval_sec = service_data.quantity / 15;
-                            time_scale = 15;
+                            timer_interval_sec = service_data.quantity / 13.5;
+                            time_scale = 13.5;
                             break;
                         case 1: // Lime
                             gpio_set_level(WATER_GPIO, 1);
                             gpio_set_level(FLAVOR1_GPIO, 1);
-                            timer_interval_sec = service_data.quantity / 18;    //18 ml / s
-                            time_scale = 18;
+                            timer_interval_sec = service_data.quantity / 17.5;    //18 ml / s
+                            time_scale = 17.5;
                             break;
                         case 2: // Cherry
                             gpio_set_level(WATER_GPIO, 1);
                             gpio_set_level(FLAVOR2_GPIO, 1);
-                            timer_interval_sec = service_data.quantity / 18;
-                            time_scale = 18;
+                            timer_interval_sec = service_data.quantity / 17.5;
+                            time_scale = 17.5;
                             break;
                         default:
                             gpio_set_level(WATER_GPIO, 1);
-                            timer_interval_sec = service_data.quantity / 15;
-                            time_scale = 15;
+                            timer_interval_sec = service_data.quantity / 17.5;
+                            time_scale = 17.5;
                             break;
                     }
 
@@ -280,6 +284,8 @@ void nfc_task(void *pvParameter)
                     timer_start(TIMER_GROUP_0, TIMER_0);
 
                     uint64_t counter_value;
+
+                    xQueueReset(s_timer_queue);
                     xQueueReceive(s_timer_queue, &counter_value, portMAX_DELAY);
                     printf("Time   : %.8f s\r\n", (double) counter_value / TIMER_SCALE);
 
@@ -292,7 +298,7 @@ void nfc_task(void *pvParameter)
                     gpio_intr_disable(TOF_INTR_GPIO);
                     gpio_set_level(CONFIG_XSHUT_IO, 0);
 
-                    gpio_set_level(BLINK_GPIO, 0);
+                    gpio_set_level(STATUS_GPIO, 0);
                 }
                 else
                 {
@@ -302,6 +308,7 @@ void nfc_task(void *pvParameter)
             else
             {
                 ESP_LOGI(TAG, "Timed out, no response received from the server");
+                gpio_set_level(STATUS_GPIO, 0);
             }
         }
         else
@@ -335,8 +342,7 @@ void app_main()
     i2c_init();
     io_config();
 
-    //xTaskCreate(&blink_task, "blink_task", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
-    
+    xTaskCreate(&blink_task, "blink_task", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     xTaskCreate(&mqtt_task, "mqtt_task", 8192, NULL, 5, NULL);
     xTaskCreate(&nfc_task, "nfc_task", 4096, NULL, 4, &xServiceTask);
     //xTaskCreate(&process_timer_task, "process_timer_task", 4096, NULL, 3, NULL);
